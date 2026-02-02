@@ -16,6 +16,9 @@ SUPPORTED_ASSETS = {
     "crypto": [
         {"symbol": "BTCUSDT", "name": "Bitcoin"},
         {"symbol": "ETHUSDT", "name": "Ethereum"},
+        {"symbol": "SOLUSDT", "name": "Solana"},
+        {"symbol": "BNBUSDT", "name": "BNB"},
+        {"symbol": "XRPUSDT", "name": "Ripple"},
     ],
     "stocks": [
         {"symbol": "AAPL", "name": "Apple Inc."},

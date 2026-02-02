@@ -19,6 +19,10 @@ from app.services.yahoo_finance_fallback import (
     YahooFinanceFallback,
     get_fallback_response_data
 )
+from app.services.crypto_fallback import (
+    CryptoDataFallback,
+    get_crypto_fallback_response_data
+)
 from app.schemas.patterns import (
     AnalisisPatronesRequest,
     AnalisisPatronesResponse,
@@ -443,7 +447,7 @@ async def analizar_activo(
         
         # Verificar que se obtuvieron velas
         if not velas or len(velas) == 0:
-            # Si es stocks/cedears y no hay velas, devolver fallback en lugar de 404
+            # stocks/cedears: fallback Yahoo
             if market.lower() in ["stocks", "cedears"]:
                 fallback_data = get_fallback_response_data(
                     market.lower(),
@@ -452,7 +456,6 @@ async def analizar_activo(
                 )
                 precio_referencia = fallback_data.get("precio_referencia")
                 precio_actual = precio_referencia if precio_referencia is not None else 0.0
-                
                 return AnalisisUnificadoResponse(
                     asset=symbol.upper(),
                     market=market.lower(),
@@ -466,13 +469,24 @@ async def analizar_activo(
                     message_code=fallback_data.get("message_code"),
                     confidence=fallback_data.get("confidence")
                 )
-            else:
-                # Para crypto, devolver 404 si no hay velas
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No se pudieron obtener velas para {symbol} en el mercado {market}. "
-                           "Verifica que el símbolo sea correcto."
-                )
+            # crypto: fallback educativo (nunca 500)
+            fallback_data = get_crypto_fallback_response_data(
+                symbol.upper(),
+                timeframe
+            )
+            return AnalisisUnificadoResponse(
+                asset=symbol.upper(),
+                market=market.lower(),
+                timeframe=timeframe,
+                precio_actual=0.0,
+                total_velas_analizadas=0,
+                patrones_detectados=0,
+                patrones=[],
+                disclaimer_code=fallback_data.get("disclaimer_code", "DISCLAIMER"),
+                status_code=fallback_data.get("status_code"),
+                message_code=fallback_data.get("message_code"),
+                confidence=fallback_data.get("confidence")
+            )
         
         # Paso 2: Ejecutar el análisis de patrones (mismo motor para todos los mercados)
         resultado_analisis = analizar_patrones(velas)
@@ -495,6 +509,29 @@ async def analizar_activo(
         
         return AnalisisUnificadoResponse(**respuesta)
     
+    except CryptoDataFallback as fallback:
+        # Crypto: CoinGecko y Binance fallaron (451, timeout, etc.)
+        # Nunca devolver 500, siempre JSON educativo válido
+        fallback_data = get_crypto_fallback_response_data(
+            fallback.symbol,
+            fallback.timeframe
+        )
+        precio_referencia = fallback_data.get("precio_referencia")
+        precio_actual = precio_referencia if precio_referencia is not None else 0.0
+        return AnalisisUnificadoResponse(
+            asset=symbol.upper(),
+            market=market.lower(),
+            timeframe=timeframe,
+            precio_actual=precio_actual,
+            total_velas_analizadas=0,
+            patrones_detectados=0,
+            patrones=[],
+            disclaimer_code=fallback_data.get("disclaimer_code", "DISCLAIMER"),
+            status_code=fallback_data.get("status_code"),
+            message_code=fallback_data.get("message_code"),
+            confidence=fallback_data.get("confidence")
+        )
+
     except YahooFinanceFallback as fallback:
         # Yahoo Finance no disponible y no hay cache válido
         # Devolver respuesta de fallback válida (no error)
@@ -524,10 +561,8 @@ async def analizar_activo(
         )
     
     except ValueError as e:
-        # Error de validación (market inválido, timeframe inválido, etc.)
-        # PERO: si es stocks/cedears y el error viene de Yahoo, devolver fallback
+        # Error de validación: devolver fallback educativo (nunca 500)
         if market.lower() in ["stocks", "cedears"]:
-            # Cualquier ValueError relacionado con Yahoo debe ser fallback
             fallback_data = get_fallback_response_data(
                 market.lower(),
                 symbol.upper(),
@@ -535,7 +570,6 @@ async def analizar_activo(
             )
             precio_referencia = fallback_data.get("precio_referencia")
             precio_actual = precio_referencia if precio_referencia is not None else 0.0
-            
             return AnalisisUnificadoResponse(
                 asset=symbol.upper(),
                 market=market.lower(),
@@ -549,11 +583,20 @@ async def analizar_activo(
                 message_code=fallback_data.get("message_code"),
                 confidence=fallback_data.get("confidence")
             )
-        
-        # Para crypto u otros mercados, devolver 400
-        raise HTTPException(
-            status_code=400,
-            detail=f"Parámetro inválido: {str(e)}"
+        # crypto: fallback educativo para símbolo inválido u otro ValueError
+        fallback_data = get_crypto_fallback_response_data(symbol.upper(), timeframe)
+        return AnalisisUnificadoResponse(
+            asset=symbol.upper(),
+            market=market.lower(),
+            timeframe=timeframe,
+            precio_actual=0.0,
+            total_velas_analizadas=0,
+            patrones_detectados=0,
+            patrones=[],
+            disclaimer_code=fallback_data.get("disclaimer_code", "DISCLAIMER"),
+            status_code=fallback_data.get("status_code"),
+            message_code=fallback_data.get("message_code"),
+            confidence=fallback_data.get("confidence")
         )
     
     except HTTPException:
@@ -562,9 +605,8 @@ async def analizar_activo(
     
     except Exception as e:
         # Error inesperado
-        # IMPORTANTE: Si es stocks/cedears, NUNCA devolver 500 - siempre fallback
+        # IMPORTANTE: Nunca devolver 500 por fuentes externas - siempre fallback
         if market.lower() in ["stocks", "cedears"]:
-            # Cualquier error de stocks/cedears debe devolver fallback
             fallback_data = get_fallback_response_data(
                 market.lower(),
                 symbol.upper(),
@@ -572,7 +614,6 @@ async def analizar_activo(
             )
             precio_referencia = fallback_data.get("precio_referencia")
             precio_actual = precio_referencia if precio_referencia is not None else 0.0
-            
             return AnalisisUnificadoResponse(
                 asset=symbol.upper(),
                 market=market.lower(),
@@ -586,19 +627,19 @@ async def analizar_activo(
                 message_code=fallback_data.get("message_code"),
                 confidence=fallback_data.get("confidence")
             )
-        
-        # Solo para crypto u otros errores no relacionados con Yahoo
-        error_message = str(e)
-        if "no fue encontrado" in error_message or "No se encontraron datos" in error_message:
-            status_code = 404
-        else:
-            status_code = 500
-            error_message = (
-                f"Error al analizar {symbol}: {error_message}. "
-                "Verifica tu conexión a internet o intenta de nuevo más tarde."
-            )
-        
-        raise HTTPException(
-            status_code=status_code,
-            detail=error_message
+
+        # crypto: fallback educativo (nunca 500 por fuentes externas)
+        fallback_data = get_crypto_fallback_response_data(symbol.upper(), timeframe)
+        return AnalisisUnificadoResponse(
+            asset=symbol.upper(),
+            market=market.lower(),
+            timeframe=timeframe,
+            precio_actual=0.0,
+            total_velas_analizadas=0,
+            patrones_detectados=0,
+            patrones=[],
+            disclaimer_code=fallback_data.get("disclaimer_code", "DISCLAIMER"),
+            status_code=fallback_data.get("status_code"),
+            message_code=fallback_data.get("message_code"),
+            confidence=fallback_data.get("confidence")
         )
